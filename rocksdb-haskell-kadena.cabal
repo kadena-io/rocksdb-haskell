@@ -7,22 +7,39 @@ license: BSD-3-Clause
 license-file: LICENSE
 author: Kim Altintop, Alexander Thiemann et.al. (see AUTHORS file)
 maintainer: Edmund Noble <edmund@kadena.io>
-copyright: Copyright (c) 2012-2014 The leveldb-haskell Authors, Copyright (c) 2014 The rocksdb-haskell Authors
+copyright:
+  Copyright (c) 2022 Kadena LLC
+  Copyright (c) 2014 The rocksdb-haskell Authors
+  Copyright (c) 2012-2014 The leveldb-haskell Authors
 category: Database, FFI
 stability: Experimental
 build-type: Simple
 tested-with: GHC == 8.0.1
 description:
+    This package includes the relevant RocksDB sources and builds RocksDB from
+    source, which can take a long time.
+    .
+    In order to build this package the following libraries must be present in
+    the syste: gmp, gflags.
+    .
+    The build also requires the following optional libraries to be present in
+    the system: snappy, z, bz2, lz4, zstd, tbb. If one of these is missing, one
+    has to comment out the respective entries in list of extra-libraries and the
+    cxx-flags in the file rocksb-haskell-kadena.cabal.
+    .
     From <http://rocksdb.org>:
     .
-    RocksDB is an embeddable persistent key-value store for fast storage. RocksDB can also be the foundation for a client-server database but our current focus is on embedded workloads.
+    RocksDB is an embeddable persistent key-value store for fast storage. RocksDB can also be the
+    foundation for a client-server database but our current focus is on embedded workloads.
     .
-    RocksDB builds on LevelDB to be scalable to run on servers with many CPU cores, to efficiently use fast storage, to support IO-bound, in-memory and write-once workloads, and to be flexible to allow for innovation.
+    RocksDB builds on LevelDB to be scalable to run on servers with many CPU cores, to efficiently
+    use fast storage, to support IO-bound, in-memory and write-once workloads, and to be flexible to
+    allow for innovation.
 
 extra-source-files:
     README.md
     AUTHORS
-    rocksdb-6.29.3/include
+    rocksdb-6.29.3
 
 source-repository head
   type: git
@@ -34,6 +51,8 @@ library
   ghc-options:
     -Wall
     -funbox-strict-fields
+    -optl-static-libstdc++
+  ld-options: -static-libstdc++
 
   exposed-modules:
     Database.RocksDB
@@ -43,6 +62,7 @@ library
     Database.RocksDB.Iterator
     Database.RocksDB.Types
 
+  -- TODO move into source files
   other-extensions:
     CPP
     ForeignFunctionInterface
@@ -59,16 +79,14 @@ library
     , resourcet > 0.3.2
     , transformers
 
-  -- extra-Libraries: rocksdb
-  -- extra-bundled-libraries:
-  --   Crocksdb
-  -- install-includes:
-  --   TODO
-
   include-dirs:
     rocksdb-6.29.3
     rocksdb-6.29.3/include
 
+  -- All of the following libraries are optional. If one of the libraries
+  -- is not available on the build host, it can be commented out in the
+  -- list below.
+  --
   extra-libraries:
     snappy
     gflags
@@ -82,6 +100,9 @@ library
     extra-libraries:
       jemalloc
 
+  -- Uncomment and update the following lines if you want to use jemalloc with
+  -- a MacOS build:
+  --
   -- if os(macos)
   --   extra-libraries:
   --     jemalloc
@@ -90,6 +111,7 @@ library
   --   ld-options:
   --     /usr/local/Cellar/jemalloc/5.2.1_1/lib/libjemalloc_pic.a
 
+  -- These options are extracted from CXXFLAGS the RocksDB Makefile
   cxx-options:
     -fno-rtti
     -g
@@ -129,24 +151,26 @@ library
     -Wnon-virtual-dtor
     -Wno-missing-field-initializers
 
-    if os(linux)
-      cxx-options:
-        -DROCKSDB_JEMALLOC
-        -DJEMALLOC_NO_DEMANGLE
-        -DOS_LINUX
-        -fno-builtin-memcmp
-        -DROCKSDB_FALLOCATE_PRESENT
-        -DROCKSDB_MALLOC_USABLE_SIZE
-        -DROCKSDB_PTHREAD_ADAPTIVE_MUTEX
-        -DROCKSDB_RANGESYNC_PRESENT
-        -DROCKSDB_SCHED_GETCPU_PRESENT
-        -DROCKSDB_AUXV_GETAUXVAL_PRESENT
-    else if os(macos)
-      cxx-options:
-        -DOS_MACOSX
-        -Wshorten-64-to-32
-        -DHAVE_FULLFSYNC
+  if os(linux)
+    cxx-options:
+      -DROCKSDB_JEMALLOC
+      -DJEMALLOC_NO_DEMANGLE
+      -DOS_LINUX
+      -fno-builtin-memcmp
+      -DROCKSDB_FALLOCATE_PRESENT
+      -DROCKSDB_MALLOC_USABLE_SIZE
+      -DROCKSDB_PTHREAD_ADAPTIVE_MUTEX
+      -DROCKSDB_RANGESYNC_PRESENT
+      -DROCKSDB_SCHED_GETCPU_PRESENT
+      -DROCKSDB_AUXV_GETAUXVAL_PRESENT
 
+  if os(darwin)
+    cxx-options:
+      -DOS_MACOSX
+      -Wshorten-64-to-32
+      -DHAVE_FULLFSYNC
+
+  -- These sources are extracted from LIB_OBJECTS the RocksDB Makefile
   cxx-sources:
     rocksdb-6.29.3/cache/cache.cc
     rocksdb-6.29.3/cache/cache_entry_roles.cc
@@ -184,7 +208,6 @@ library
     rocksdb-6.29.3/db/db_impl/compacted_db_impl.cc
     rocksdb-6.29.3/db/db_impl/db_impl.cc
     rocksdb-6.29.3/db/db_impl/db_impl_compaction_flush.cc
-    rocksdb-6.29.3/db/db_impl/db_impl_debug.cc
     rocksdb-6.29.3/db/db_impl/db_impl_experimental.cc
     rocksdb-6.29.3/db/db_impl/db_impl_files.cc
     rocksdb-6.29.3/db/db_impl/db_impl_open.cc
@@ -292,12 +315,6 @@ library
     rocksdb-6.29.3/options/options_helper.cc
     rocksdb-6.29.3/options/options_parser.cc
     rocksdb-6.29.3/port/port_posix.cc
-    rocksdb-6.29.3/port/win/env_default.cc
-    rocksdb-6.29.3/port/win/env_win.cc
-    rocksdb-6.29.3/port/win/io_win.cc
-    rocksdb-6.29.3/port/win/port_win.cc
-    rocksdb-6.29.3/port/win/win_logger.cc
-    rocksdb-6.29.3/port/win/win_thread.cc
     rocksdb-6.29.3/port/stack_trace.cc
     rocksdb-6.29.3/table/adaptive/adaptive_table_factory.cc
     rocksdb-6.29.3/table/block_based/binary_search_index_reader.cc
@@ -365,7 +382,6 @@ library
     rocksdb-6.29.3/util/compression_context_cache.cc
     rocksdb-6.29.3/util/concurrent_task_limiter_impl.cc
     rocksdb-6.29.3/util/crc32c.cc
-    rocksdb-6.29.3/util/crc32c_arm64.cc
     rocksdb-6.29.3/util/dynamic_bloom.cc
     rocksdb-6.29.3/util/hash.cc
     rocksdb-6.29.3/util/murmurhash.cc
@@ -458,15 +474,25 @@ library
     rocksdb-6.29.3/utilities/transactions/lock/range/range_tree/range_tree_lock_manager.cc
     rocksdb-6.29.3/utilities/transactions/lock/range/range_tree/range_tree_lock_tracker.cc
 
+  if os(windows)
+    cxx-sources:
+      rocksdb-6.29.3/port/win/env_default.cc
+      rocksdb-6.29.3/port/win/env_win.cc
+      rocksdb-6.29.3/port/win/io_win.cc
+      rocksdb-6.29.3/port/win/port_win.cc
+      rocksdb-6.29.3/port/win/win_logger.cc
+      rocksdb-6.29.3/port/win/win_thread.cc
+
 test-suite rocksdb-tests
   ghc-options: -Wall
   main-is: tests.hs
   type: exitcode-stdio-1.0
   default-language: Haskell2010
   hs-source-dirs: tests
+  extra-libraries: stdc++
   build-depends:
       base >= 3 && < 5
-    , rocksdb-haskell
+    , rocksdb-haskell-kadena
     , hspec >= 1.8
     , process >= 1.1.0.2
     , bytestring >= 0.10.4.0
