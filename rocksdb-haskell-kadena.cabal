@@ -39,7 +39,7 @@ description:
 extra-source-files:
     README.md
     AUTHORS
-    rocksdb-6.29.3
+    rocksdb-6.29.3/**/*.h
 
 source-repository head
   type: git
@@ -128,13 +128,13 @@ library
     -DHAVE_LZCNT
     -DHAVE_UINT128_EXTENSION
     -DROCKSDB_SUPPORT_THREAD_LOCAL
-    -O2
     -fno-omit-frame-pointer
     -momit-leaf-frame-pointer
     -DNDEBUG
     -Woverloaded-virtual
     -Wnon-virtual-dtor
     -Wno-missing-field-initializers
+    -- -O2
 
   if os(linux)
     cxx-options:
