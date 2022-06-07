@@ -83,6 +83,9 @@ library
     rocksdb-6.29.3
     rocksdb-6.29.3/include
 
+  install-includes:
+    rocksdb/c.h
+
   -- All of the following libraries are optional. If one of the libraries
   -- is not available on the build host, it can be commented out in the
   -- list below.
