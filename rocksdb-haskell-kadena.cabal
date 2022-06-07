@@ -96,21 +96,6 @@ library
     zstd
     tbb
 
-  if os(linux)
-    extra-libraries:
-      jemalloc
-
-  -- Uncomment and update the following lines if you want to use jemalloc with
-  -- a MacOS build:
-  --
-  -- if os(macos)
-  --   extra-libraries:
-  --     jemalloc
-  --   include-dirs:
-  --     /usr/local/Cellar/jemalloc/5.2.1_1/include
-  --   ld-options:
-  --     /usr/local/Cellar/jemalloc/5.2.1_1/lib/libjemalloc_pic.a
-
   -- These options are extracted from CXXFLAGS the RocksDB Makefile
   cxx-options:
     -fno-rtti
@@ -153,8 +138,6 @@ library
 
   if os(linux)
     cxx-options:
-      -DROCKSDB_JEMALLOC
-      -DJEMALLOC_NO_DEMANGLE
       -DOS_LINUX
       -fno-builtin-memcmp
       -DROCKSDB_FALLOCATE_PRESENT
@@ -284,7 +267,6 @@ library
     rocksdb-6.29.3/logging/log_buffer.cc
     rocksdb-6.29.3/memory/arena.cc
     rocksdb-6.29.3/memory/concurrent_arena.cc
-    rocksdb-6.29.3/memory/jemalloc_nodump_allocator.cc
     rocksdb-6.29.3/memory/memkind_kmem_allocator.cc
     rocksdb-6.29.3/memory/memory_allocator.cc
     rocksdb-6.29.3/memtable/alloc_tracker.cc
