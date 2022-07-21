@@ -106,12 +106,9 @@ mkOpts Options{..} = do
     return (Options' opts_ptr Nothing cmp)
 
   where
-    ccompression NoCompression =
-        noCompression
-    ccompression SnappyCompression =
-        snappyCompression
-    ccompression ZlibCompression =
-        zlibCompression
+    ccompression NoCompression = noCompression
+    ccompression SnappyCompression = snappyCompression
+    ccompression ZlibCompression = zlibCompression
 
     maybeSetCmp :: OptionsPtr -> Maybe Comparator -> IO (Maybe Comparator')
     maybeSetCmp opts_ptr (Just mcmp) = Just <$> setcmp opts_ptr mcmp
