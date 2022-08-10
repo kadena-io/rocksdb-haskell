@@ -122,12 +122,7 @@ library
     -DZSTD
     -DTBB
     -DROCKSDB_BACKTRACE
-    -march=native
-    -DHAVE_SSE42
-    -DHAVE_PCLMUL
-    -DHAVE_BMI
-    -DHAVE_LZCNT
-    -DHAVE_UINT128_EXTENSION
+    -march=nehalem
     -DROCKSDB_SUPPORT_THREAD_LOCAL
     -fno-omit-frame-pointer
     -momit-leaf-frame-pointer

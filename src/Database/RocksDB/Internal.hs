@@ -55,7 +55,6 @@ import           Database.RocksDB.C
 import           Database.RocksDB.Types
 
 import qualified Data.ByteString        as BS
-import System.IO.Unsafe
 
 
 -- | Database handle
