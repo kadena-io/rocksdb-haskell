@@ -40,54 +40,6 @@ using std::vector;
 using std::unordered_set;
 using std::map;
 
-class DelimitedPrefixTransform : public SliceTransform {
- protected:
-  std::vector<char> *delims;
- public:
-
-  explicit DelimitedPrefixTransform(std::vector<char> *_delims) : delims(_delims) { }
-  ~DelimitedPrefixTransform() {
-  }
-
-  static const char* kClassName() { return "rocksdb-haskell.DelimitedPrefix"; }
-  static const char* kNickName() { return "table"; }
-  const char* Name() const override { return kClassName(); }
-  Slice Transform(const Slice& src) const override {
-    size_t prefix_end;
-    for (char c : *delims) {
-      if ((prefix_end = std::string(src.data()).find(c)) != std::string::npos) {
-        return Slice(src.data(), prefix_end);
-      }
-    }
-    // we must return the entire string if there's no symbol because of the law:
-    // prefix(prefix(str)) == prefix(str)
-    // this prevents us from implementing a real InDomain, which will go badly
-    // (redundant prefix seeking)
-    // *if* we mix prefixed and nonprefixed keys in the same database
-    return src;
-  }
-
-  bool InDomain(const Slice&) const override {
-    return true;
-  }
-
-  bool InRange(const Slice&) const override {
-    return true;
-  }
-
-  bool FullLengthEnabled(size_t*) const override {
-    return false;
-  }
-
-  bool SameResultWhenAppended(const Slice&) const override {
-    return false;
-  }
-};
-
-std::vector<char> std_delimiters { '$', '%' };
-
-DelimitedPrefixTransform dollar_percent_delimited_transform(&std_delimiters);
-
 extern "C" {
 
 struct rocksdb_t                 { DB*               rep; };
@@ -119,14 +71,6 @@ void rocksdb_delete_range(rocksdb_t* db,
       SaveError(errptr, db->rep->DeleteRange(options->rep, nullptr,
                                          Slice(start_key, start_key_len),
                                          Slice(end_key, end_key_len)));
-}
-
-void rocksdb_readoptions_set_auto_prefix_mode(rocksdb_readoptions_t* options, bool auto_prefix_mode) {
-  options->rep.auto_prefix_mode = auto_prefix_mode;
-}
-
-const void* rocksdb_options_table_prefix_extractor() {
-  return &dollar_percent_delimited_transform;
 }
 
 }

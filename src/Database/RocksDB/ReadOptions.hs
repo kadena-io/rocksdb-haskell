@@ -9,7 +9,6 @@ module Database.RocksDB.ReadOptions
     , setUseSnapshot
     , setUpperBound
     , setLowerBound
-    , setAutoPrefixMode
     )
     where
 
@@ -81,11 +80,6 @@ setLowerBound lower = ReadOptions $ \opts_ptr k ->
     BU.unsafeUseAsCStringLen lower $ \(lowerPtr, lowerLen) -> do
         rocksdb_readoptions_set_iterate_lower_bound opts_ptr lowerPtr (fromIntegral lowerLen)
         k
-
-setAutoPrefixMode :: Bool -> ReadOptions
-setAutoPrefixMode m = ReadOptions $ \opts_ptr k -> do
-    rocksdb_readoptions_set_auto_prefix_mode opts_ptr (boolToNum m)
-    k
 
 boolToNum :: Num b => Bool -> b
 boolToNum True  = fromIntegral (1 :: Int)
