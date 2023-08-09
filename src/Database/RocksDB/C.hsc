@@ -339,20 +339,6 @@ foreign import ccall "wrapper" mkCF :: CreateFilterFun -> IO (FunPtr CreateFilte
 -- | Make a FunPtr to a user-defined key_may_match function
 foreign import ccall "wrapper" mkKMM :: KeyMayMatchFun -> IO (FunPtr KeyMayMatchFun)
 
-foreign import ccall safe "rocksdb\\c.h rocksdb_filterpolicy_create"
-  c_rocksdb_filterpolicy_create :: StatePtr
-                                -> FunPtr Destructor
-                                -> FunPtr CreateFilterFun
-                                -> FunPtr KeyMayMatchFun
-                                -> FunPtr NameFun
-                                -> IO FilterPolicyPtr
-
-foreign import ccall safe "rocksdb\\c.h rocksdb_filterpolicy_destroy"
-  c_rocksdb_filterpolicy_destroy :: FilterPolicyPtr -> IO ()
-
-foreign import ccall safe "rocksdb\\c.h rocksdb_filterpolicy_create_bloom"
-  c_rocksdb_filterpolicy_create_bloom :: CInt -> IO FilterPolicyPtr
-
 --
 -- Read options
 --
