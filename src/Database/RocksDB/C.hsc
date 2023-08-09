@@ -287,11 +287,6 @@ foreign import ccall safe "rocksdb\\c.h rocksdb_options_set_max_open_files"
 foreign import ccall safe "rocksdb\\c.h rocksdb_options_set_compression"
   c_rocksdb_options_set_compression :: OptionsPtr -> CompressionOpt -> IO ()
 
-foreign import ccall unsafe "rocksdb\\c.h rocksdb_options_set_prefix_extractor"
-    rocksdb_options_set_prefix_extractor :: OptionsPtr -> Ptr PrefixExtractor -> IO ()
-
-foreign import ccall unsafe "cpp\\chainweb-rocksdb.h rocksdb_options_table_prefix_extractor"
-    rocksdb_options_table_prefix_extractor :: Ptr PrefixExtractor
 --
 -- Comparator
 --
@@ -344,20 +339,6 @@ foreign import ccall "wrapper" mkCF :: CreateFilterFun -> IO (FunPtr CreateFilte
 -- | Make a FunPtr to a user-defined key_may_match function
 foreign import ccall "wrapper" mkKMM :: KeyMayMatchFun -> IO (FunPtr KeyMayMatchFun)
 
-foreign import ccall safe "rocksdb\\c.h rocksdb_filterpolicy_create"
-  c_rocksdb_filterpolicy_create :: StatePtr
-                                -> FunPtr Destructor
-                                -> FunPtr CreateFilterFun
-                                -> FunPtr KeyMayMatchFun
-                                -> FunPtr NameFun
-                                -> IO FilterPolicyPtr
-
-foreign import ccall safe "rocksdb\\c.h rocksdb_filterpolicy_destroy"
-  c_rocksdb_filterpolicy_destroy :: FilterPolicyPtr -> IO ()
-
-foreign import ccall safe "rocksdb\\c.h rocksdb_filterpolicy_create_bloom"
-  c_rocksdb_filterpolicy_create_bloom :: CInt -> IO FilterPolicyPtr
-
 --
 -- Read options
 --
@@ -382,9 +363,6 @@ foreign import ccall unsafe "rocksdb\\c.h rocksdb_readoptions_set_iterate_upper_
 
 foreign import ccall unsafe "rocksdb\\c.h rocksdb_readoptions_set_iterate_lower_bound"
     rocksdb_readoptions_set_iterate_lower_bound :: ReadOptionsPtr -> CString -> CSize -> IO ()
-
-foreign import ccall unsafe "cpp\\chainweb-rocksdb.h rocksdb_readoptions_set_auto_prefix_mode"
-    rocksdb_readoptions_set_auto_prefix_mode :: ReadOptionsPtr -> CBool -> IO ()
 
 --
 -- Write options
