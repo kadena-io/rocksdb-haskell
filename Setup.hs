@@ -54,7 +54,7 @@ main = defaultMainWithHooks
                             runLBIProgram lbi tarProgram ["-xzf", rocksdb_tar]
                             copyDirectoryRecursive minBound (rocksdb_srcdir </> "include") (toplevel </> "include")
                             nprocs <- getNumProcessors
-                            let jobs = max 2 $ min 4 $ nprocs
+                            let jobs = max 2 $ min 6 $ nprocs
                             -- we must build the shared library first.
                             -- if we build static first, when we go to build
                             -- the shared library, -fPIC will still be off,

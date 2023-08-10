@@ -25,6 +25,7 @@ source-repository head
   location: git://github.com/kadena-io/rocksdb-haskell.git
 
 library
+  ghc-options: -optl -trace-symbol=name
   cxx-sources: cpp/chainweb-rocksdb.cpp
   include-dirs: cpp
   install-includes: chainweb-rocksdb.h
@@ -58,12 +59,13 @@ library
   hs-source-dirs:   src
 
 test-suite rocksdb-tests
+  ghc-options: -optl -Wl,--trace-symbol=rocksdb_filterpolicy_create
   ghc-options: -Wall
   main-is: tests.hs
   type: exitcode-stdio-1.0
   hs-source-dirs: tests
   build-depends:       base >= 3 && < 5
-                     , rocksdb-haskell
+                     , rocksdb-haskell-kadena
                      , hspec >= 1.8
                      , process >= 1.1.0.2
                      , bytestring >= 0.10.4.0

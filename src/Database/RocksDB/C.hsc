@@ -30,7 +30,6 @@ data LReadOptions
 data LSnapshot
 data LWriteBatch
 data LWriteOptions
-data LFilterPolicy
 data PrefixExtractor
 data Checkpoint
 
@@ -44,7 +43,6 @@ type ReadOptionsPtr  = Ptr LReadOptions
 type SnapshotPtr     = Ptr LSnapshot
 type WriteBatchPtr   = Ptr LWriteBatch
 type WriteOptionsPtr = Ptr LWriteOptions
-type FilterPolicyPtr = Ptr LFilterPolicy
 
 type DBName = CString
 type ErrPtr = Ptr CString
@@ -320,43 +318,6 @@ foreign import ccall safe "rocksdb\\c.h rocksdb_comparator_create"
 foreign import ccall safe "rocksdb\\c.h rocksdb_comparator_destroy"
   c_rocksdb_comparator_destroy :: ComparatorPtr -> IO ()
 
-
---
--- Filter Policy
---
-
-type CreateFilterFun = StatePtr
-                     -> Ptr CString -- ^ key array
-                     -> Ptr CSize   -- ^ key length array
-                     -> CInt        -- ^ num keys
-                     -> Ptr CSize   -- ^ filter length
-                     -> IO CString  -- ^ the filter
-type KeyMayMatchFun  = StatePtr
-                     -> CString     -- ^ key
-                     -> CSize       -- ^ key length
-                     -> CString     -- ^ filter
-                     -> CSize       -- ^ filter length
-                     -> IO CUChar   -- ^ whether key is in filter
-
--- | Make a FunPtr to a user-defined create_filter function
-foreign import ccall "wrapper" mkCF :: CreateFilterFun -> IO (FunPtr CreateFilterFun)
-
--- | Make a FunPtr to a user-defined key_may_match function
-foreign import ccall "wrapper" mkKMM :: KeyMayMatchFun -> IO (FunPtr KeyMayMatchFun)
-
-foreign import ccall safe "rocksdb\\c.h rocksdb_filterpolicy_create"
-  c_rocksdb_filterpolicy_create :: StatePtr
-                                -> FunPtr Destructor
-                                -> FunPtr CreateFilterFun
-                                -> FunPtr KeyMayMatchFun
-                                -> FunPtr NameFun
-                                -> IO FilterPolicyPtr
-
-foreign import ccall safe "rocksdb\\c.h rocksdb_filterpolicy_destroy"
-  c_rocksdb_filterpolicy_destroy :: FilterPolicyPtr -> IO ()
-
-foreign import ccall safe "rocksdb\\c.h rocksdb_filterpolicy_create_bloom"
-  c_rocksdb_filterpolicy_create_bloom :: CInt -> IO FilterPolicyPtr
 
 --
 -- Read options
