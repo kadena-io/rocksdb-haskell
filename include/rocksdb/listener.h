@@ -12,6 +12,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "rocksdb/advanced_options.h"
 #include "rocksdb/compaction_job_stats.h"
 #include "rocksdb/compression_type.h"
 #include "rocksdb/customizable.h"
@@ -139,7 +140,10 @@ enum class CompactionReason : int {
   // According to the comments in flush_job.cc, RocksDB treats flush as
   // a level 0 compaction in internal stats.
   kFlush,
-  // Compaction caused by external sst file ingestion
+  // [InternalOnly] External sst file ingestion treated as a compaction
+  // with placeholder input level L0 as file ingestion
+  // technically does not have an input level like other compactions.
+  // Used only for internal stats and conflict checking with other compactions
   kExternalSstIngestion,
   // Compaction due to SST file being too old
   kPeriodicCompaction,
@@ -147,6 +151,12 @@ enum class CompactionReason : int {
   kChangeTemperature,
   // Compaction scheduled to force garbage collection of blob files
   kForcedBlobGC,
+  // A special TTL compaction for RoundRobin policy, which basically the same as
+  // kLevelMaxLevelSize, but the goal is to compact TTLed files.
+  kRoundRobinTtl,
+  // [InternalOnly] DBImpl::ReFitLevel treated as a compaction,
+  // Used only for internal conflict checking with other compactions
+  kRefitLevel,
   // total number of compaction reasons, new reasons must be added above this.
   kNumOfReasons,
 };
@@ -184,12 +194,6 @@ enum class BackgroundErrorReason {
   kManifestWriteNoWAL,
 };
 
-enum class WriteStallCondition {
-  kNormal,
-  kDelayed,
-  kStopped,
-};
-
 struct WriteStallInfo {
   // the name of the column family
   std::string cf_name;
@@ -200,7 +204,6 @@ struct WriteStallInfo {
   } condition;
 };
 
-#ifndef ROCKSDB_LITE
 
 struct FileDeletionInfo {
   FileDeletionInfo() = default;
@@ -255,16 +258,22 @@ struct FileOperationInfo {
 
   FileOperationType type;
   const std::string& path;
+  // Rocksdb try to provide file temperature information, but it's not
+  // guaranteed.
+  Temperature temperature;
   uint64_t offset;
   size_t length;
   const Duration duration;
   const SystemTimePoint& start_ts;
   Status status;
+
   FileOperationInfo(const FileOperationType _type, const std::string& _path,
                     const StartTimePoint& _start_ts,
-                    const FinishTimePoint& _finish_ts, const Status& _status)
+                    const FinishTimePoint& _finish_ts, const Status& _status,
+                    const Temperature _temperature = Temperature::kUnknown)
       : type(_type),
         path(_path),
+        temperature(_temperature),
         duration(std::chrono::duration_cast<std::chrono::nanoseconds>(
             _finish_ts - _start_ts.second)),
         start_ts(_start_ts.first),
@@ -363,6 +372,42 @@ struct CompactionFileInfo {
   uint64_t oldest_blob_file_number;
 };
 
+struct SubcompactionJobInfo {
+  ~SubcompactionJobInfo() { status.PermitUncheckedError(); }
+  // the id of the column family where the compaction happened.
+  uint32_t cf_id;
+  // the name of the column family where the compaction happened.
+  std::string cf_name;
+  // the status indicating whether the compaction was successful or not.
+  Status status;
+  // the id of the thread that completed this compaction job.
+  uint64_t thread_id;
+  // the job id, which is unique in the same thread.
+  int job_id;
+
+  // sub-compaction job id, which is only unique within the same compaction, so
+  // use both 'job_id' and 'subcompaction_job_id' to identify a subcompaction
+  // within an instance.
+  // For non subcompaction job, it's set to -1.
+  int subcompaction_job_id;
+  // the smallest input level of the compaction.
+  int base_input_level;
+  // the output level of the compaction.
+  int output_level;
+
+  // Reason to run the compaction
+  CompactionReason compaction_reason;
+
+  // Compression algorithm used for output files
+  CompressionType compression;
+
+  // Statistics and other additional details on the compaction
+  CompactionJobStats stats;
+
+  // Compression algorithm used for blob output files.
+  CompressionType blob_compression_type;
+};
+
 struct CompactionJobInfo {
   ~CompactionJobInfo() { status.PermitUncheckedError(); }
   // the id of the column family where the compaction happened.
@@ -375,6 +420,7 @@ struct CompactionJobInfo {
   uint64_t thread_id;
   // the job id, which is unique in the same thread.
   int job_id;
+
   // the smallest input level of the compaction.
   int base_input_level;
   // the output level of the compaction.
@@ -579,6 +625,43 @@ class EventListener : public Customizable {
   virtual void OnCompactionCompleted(DB* /*db*/,
                                      const CompactionJobInfo& /*ci*/) {}
 
+  // A callback function to RocksDB which will be called before a sub-compaction
+  // begins. If a compaction is split to 2 sub-compactions, it will trigger one
+  // `OnCompactionBegin()` first, then two `OnSubcompactionBegin()`.
+  // If compaction is not split, it will still trigger one
+  // `OnSubcompactionBegin()`, as internally, compaction is always handled by
+  // sub-compaction. The default implementation is a no-op.
+  //
+  // Note that this function must be implemented in a way such that
+  // it should not run for an extended period of time before the function
+  // returns.  Otherwise, RocksDB may be blocked.
+  //
+  // @param ci a reference to a CompactionJobInfo struct, it contains a
+  //  `sub_job_id` which is only unique within the specified compaction (which
+  //  can be identified by `job_id`). 'ci' is released after this function is
+  //  returned, and must be copied if it's needed outside this function.
+  //  Note: `table_properties` is not set for sub-compaction, the information
+  //  could be got from `OnCompactionBegin()`.
+  virtual void OnSubcompactionBegin(const SubcompactionJobInfo& /*si*/) {}
+
+  // A callback function to RocksDB which will be called whenever a
+  // sub-compaction completed. The same as `OnSubcompactionBegin()`, if a
+  // compaction is split to 2 sub-compactions, it will be triggered twice. If
+  // a compaction is not split, it will still be triggered once.
+  // The default implementation is a no-op.
+  //
+  // Note that this function must be implemented in a way such that
+  // it should not run for an extended period of time before the function
+  // returns.  Otherwise, RocksDB may be blocked.
+  //
+  // @param ci a reference to a CompactionJobInfo struct, it contains a
+  //  `sub_job_id` which is only unique within the specified compaction (which
+  //  can be identified by `job_id`). 'ci' is released after this function is
+  //  returned, and must be copied if it's needed outside this function.
+  //  Note: `table_properties` is not set for sub-compaction, the information
+  //  could be got from `OnCompactionCompleted()`.
+  virtual void OnSubcompactionCompleted(const SubcompactionJobInfo& /*si*/) {}
+
   // A callback function for RocksDB which will be called whenever
   // a SST file is created.  Different from OnCompactionCompleted and
   // OnFlushCompleted, this callback is designed for external logging
@@ -753,11 +836,5 @@ class EventListener : public Customizable {
   ~EventListener() override {}
 };
 
-#else
-
-class EventListener {};
-struct FlushJobInfo {};
-
-#endif  // ROCKSDB_LITE
 
 }  // namespace ROCKSDB_NAMESPACE

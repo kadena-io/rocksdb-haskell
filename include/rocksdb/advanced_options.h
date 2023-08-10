@@ -10,6 +10,7 @@
 
 #include <memory>
 
+#include "rocksdb/cache.h"
 #include "rocksdb/compression_type.h"
 #include "rocksdb/memtablerep.h"
 #include "rocksdb/universal_compaction.h"
@@ -26,14 +27,11 @@ enum CompactionStyle : char {
   // level based compaction style
   kCompactionStyleLevel = 0x0,
   // Universal compaction style
-  // Not supported in ROCKSDB_LITE.
   kCompactionStyleUniversal = 0x1,
   // FIFO compaction style
-  // Not supported in ROCKSDB_LITE
   kCompactionStyleFIFO = 0x2,
   // Disable background compaction. Compaction jobs are submitted
   // via CompactFiles().
-  // Not supported in ROCKSDB_LITE
   kCompactionStyleNone = 0x3,
 };
 
@@ -54,45 +52,37 @@ enum CompactionPri : char {
   // and its size is the smallest. It in many cases can optimize write
   // amplification.
   kMinOverlappingRatio = 0x3,
-};
-
-struct CompactionOptionsFIFO {
-  // once the total sum of table files reaches this, we will delete the oldest
-  // table file
-  // Default: 1GB
-  uint64_t max_table_files_size;
-
-  // If true, try to do compaction to compact smaller files into larger ones.
-  // Minimum files to compact follows options.level0_file_num_compaction_trigger
-  // and compaction won't trigger if average compact bytes per del file is
-  // larger than options.write_buffer_size. This is to protect large files
-  // from being compacted again.
-  // Default: false;
-  bool allow_compaction = false;
-
-  // When not 0, if the data in the file is older than this threshold, RocksDB
-  // will soon move the file to warm temperature.
-  uint64_t age_for_warm = 0;
-
-  CompactionOptionsFIFO() : max_table_files_size(1 * 1024 * 1024 * 1024) {}
-  CompactionOptionsFIFO(uint64_t _max_table_files_size, bool _allow_compaction)
-      : max_table_files_size(_max_table_files_size),
-        allow_compaction(_allow_compaction) {}
+  // Keeps a cursor(s) of the successor of the file (key range) was/were
+  // compacted before, and always picks the next files (key range) in that
+  // level. The file picking process will cycle through all the files in a
+  // round-robin manner.
+  kRoundRobin = 0x4,
 };
 
 // Compression options for different compression algorithms like Zlib
 struct CompressionOptions {
+  // ==> BEGIN options that can be set by deprecated configuration syntax, <==
+  // ==> e.g. compression_opts=5:6:7:8:9:10:true:11:false                  <==
+  // ==> Please use compression_opts={level=6;strategy=7;} form instead.   <==
+
   // RocksDB's generic default compression level. Internally it'll be translated
   // to the default compression level specific to the library being used (see
   // comment above `ColumnFamilyOptions::compression`).
   //
   // The default value is the max 16-bit int as it'll be written out in OPTIONS
   // file, which should be portable.
-  const static int kDefaultCompressionLevel = 32767;
+  static constexpr int kDefaultCompressionLevel = 32767;
 
-  int window_bits;
-  int level;
-  int strategy;
+  // zlib only: windowBits parameter. See https://www.zlib.net/manual.html
+  int window_bits = -14;
+
+  // Compression "level" applicable to zstd, zlib, LZ4. Except for
+  // kDefaultCompressionLevel (see above), the meaning of each value depends
+  // on the compression algorithm.
+  int level = kDefaultCompressionLevel;
+
+  // zlib only: strategy parameter. See https://www.zlib.net/manual.html
+  int strategy = 0;
 
   // Maximum size of dictionaries used to prime the compression library.
   // Enabling dictionary can improve compression ratios when there are
@@ -100,8 +90,9 @@ struct CompressionOptions {
   //
   // The dictionary is created by sampling the SST file data. If
   // `zstd_max_train_bytes` is nonzero, the samples are passed through zstd's
-  // dictionary generator. Otherwise, the random samples are used directly as
-  // the dictionary.
+  // dictionary generator (see comments for option `use_zstd_dict_trainer` for
+  // detail on dictionary generator). If `zstd_max_train_bytes` is zero, the
+  // random samples are used directly as the dictionary.
   //
   // When compression dictionary is disabled, we compress and write each block
   // before buffering data for the next one. When compression dictionary is
@@ -110,21 +101,17 @@ struct CompressionOptions {
   //
   // The amount of data buffered can be limited by `max_dict_buffer_bytes`. This
   // buffered memory is charged to the block cache when there is a block cache.
-  // If block cache insertion fails with `Status::Incomplete` (i.e., it is
+  // If block cache insertion fails with `Status::MemoryLimit` (i.e., it is
   // full), we finalize the dictionary with whatever data we have and then stop
   // buffering.
-  //
-  // Default: 0.
-  uint32_t max_dict_bytes;
+  uint32_t max_dict_bytes = 0;
 
   // Maximum size of training data passed to zstd's dictionary trainer. Using
   // zstd's dictionary trainer can achieve even better compression ratio
   // improvements than using `max_dict_bytes` alone.
   //
   // The training data will be used to generate a dictionary of max_dict_bytes.
-  //
-  // Default: 0.
-  uint32_t zstd_max_train_bytes;
+  uint32_t zstd_max_train_bytes = 0;
 
   // Number of threads for parallel compression.
   // Parallel compression is enabled only if threads > 1.
@@ -137,9 +124,7 @@ struct CompressionOptions {
   // compressed size is in flight when compression is parallelized. To be
   // reasonably accurate, this inflation is also estimated by using historical
   // compression ratio and current bytes inflight.
-  //
-  // Default: 1.
-  uint32_t parallel_threads;
+  uint32_t parallel_threads = 1;
 
   // When the compression options are set by the user, it will be set to "true".
   // For bottommost_compression_opts, to enable it, user must set enabled=true.
@@ -148,9 +133,7 @@ struct CompressionOptions {
   //
   // For compression_opts, if compression_opts.enabled=false, it is still
   // used as compression options for compression process.
-  //
-  // Default: false.
-  bool enabled;
+  bool enabled = false;
 
   // Limit on data buffering when gathering samples to build a dictionary. Zero
   // means no limit. When dictionary is disabled (`max_dict_bytes == 0`),
@@ -169,31 +152,41 @@ struct CompressionOptions {
   // `zstd_max_train_bytes` (when enabled) can restrict how many samples we can
   // pass to the dictionary trainer. Configuring it below `max_dict_bytes` can
   // restrict the size of the final dictionary.
-  //
-  // Default: 0 (unlimited)
-  uint64_t max_dict_buffer_bytes;
+  uint64_t max_dict_buffer_bytes = 0;
 
-  CompressionOptions()
-      : window_bits(-14),
-        level(kDefaultCompressionLevel),
-        strategy(0),
-        max_dict_bytes(0),
-        zstd_max_train_bytes(0),
-        parallel_threads(1),
-        enabled(false),
-        max_dict_buffer_bytes(0) {}
-  CompressionOptions(int wbits, int _lev, int _strategy,
-                     uint32_t _max_dict_bytes, uint32_t _zstd_max_train_bytes,
-                     uint32_t _parallel_threads, bool _enabled,
-                     uint64_t _max_dict_buffer_bytes)
-      : window_bits(wbits),
-        level(_lev),
-        strategy(_strategy),
-        max_dict_bytes(_max_dict_bytes),
-        zstd_max_train_bytes(_zstd_max_train_bytes),
-        parallel_threads(_parallel_threads),
-        enabled(_enabled),
-        max_dict_buffer_bytes(_max_dict_buffer_bytes) {}
+  // Use zstd trainer to generate dictionaries. When this option is set to true,
+  // zstd_max_train_bytes of training data sampled from max_dict_buffer_bytes
+  // buffered data will be passed to zstd dictionary trainer to generate a
+  // dictionary of size max_dict_bytes.
+  //
+  // When this option is false, zstd's API ZDICT_finalizeDictionary() will be
+  // called to generate dictionaries. zstd_max_train_bytes of training sampled
+  // data will be passed to this API. Using this API should save CPU time on
+  // dictionary training, but the compression ratio may not be as good as using
+  // a dictionary trainer.
+  bool use_zstd_dict_trainer = true;
+
+  // ===> END options that can be set by deprecated configuration syntax <===
+  // ===> Use compression_opts={level=6;strategy=7;} form for below opts <===
+
+  // Essentially specifies a minimum acceptable compression ratio. A block is
+  // stored uncompressed if the compressed block does not achieve this ratio,
+  // because the downstream cost of decompression is not considered worth such
+  // a small savings (if any).
+  // However, the ratio is specified in a way that is efficient for checking.
+  // An integer from 1 to 1024 indicates the maximum allowable compressed bytes
+  // per 1KB of input, so the minimum acceptable ratio is 1024.0 / this value.
+  // For example, for a minimum ratio of 1.5:1, set to 683. See SetMinRatio().
+  // Default: abandon use of compression for a specific block or entry if
+  // compressed by less than 12.5% (minimum ratio of 1.143:1).
+  int max_compressed_bytes_per_kb = 1024 * 7 / 8;
+
+  // A convenience function for setting max_compressed_bytes_per_kb based on a
+  // minimum acceptable compression ratio (uncompressed size over compressed
+  // size).
+  void SetMinRatio(double min_ratio) {
+    max_compressed_bytes_per_kb = static_cast<int>(1024.0 / min_ratio + 0.5);
+  }
 };
 
 // Temperature of a file. Used to pass to FileSystem for a different
@@ -205,20 +198,80 @@ enum class Temperature : uint8_t {
   kHot = 0x04,
   kWarm = 0x08,
   kCold = 0x0C,
+  kLastTemperature,
+};
+
+struct FileTemperatureAge {
+  Temperature temperature = Temperature::kUnknown;
+  uint64_t age = 0;
+};
+
+struct CompactionOptionsFIFO {
+  // once the total sum of table files reaches this, we will delete the oldest
+  // table file
+  // Default: 1GB
+  uint64_t max_table_files_size;
+
+  // If true, try to do compaction to compact smaller files into larger ones.
+  // Minimum files to compact follows options.level0_file_num_compaction_trigger
+  // and compaction won't trigger if average compact bytes per del file is
+  // larger than options.write_buffer_size. This is to protect large files
+  // from being compacted again.
+  // Default: false;
+  bool allow_compaction = false;
+
+  // DEPRECATED
+  // When not 0, if the data in the file is older than this threshold, RocksDB
+  // will soon move the file to warm temperature.
+  uint64_t age_for_warm = 0;
+
+  // EXPERIMENTAL
+  // Age (in seconds) threshold for different file temperatures.
+  // When not empty, each element specifies an age threshold `age` and a
+  // temperature such that if all the data in a file is older than `age`,
+  // RocksDB will compact the file to the specified `temperature`.
+  //
+  // Note:
+  // - Flushed files will always have temperature kUnknown.
+  // - Compaction output files will have temperature kUnknown by default, so
+  //   only temperatures other than kUnknown needs to be specified.
+  // - The elements should be in increasing order with respect to `age` field.
+  //
+  // Dynamically changeable through SetOptions() API, e.g.,
+  //   SetOptions("compaction_options_fifo",
+  //   "{file_temperature_age_thresholds={
+  //    {age=10;temperature=kWarm}:{age=20;temperature=kCold}}}")
+  // In this example, all files that are at least 20 seconds old will be
+  // compacted and output files will have temperature kCold. All files that are
+  // at least 10 seconds old but younger than 20 seconds will be compacted to
+  // files with temperature kWarm.
+  //
+  // Default: empty
+  std::vector<FileTemperatureAge> file_temperature_age_thresholds{};
+
+  CompactionOptionsFIFO() : max_table_files_size(1 * 1024 * 1024 * 1024) {}
+  CompactionOptionsFIFO(uint64_t _max_table_files_size, bool _allow_compaction)
+      : max_table_files_size(_max_table_files_size),
+        allow_compaction(_allow_compaction) {}
 };
 
 // The control option of how the cache tiers will be used. Currently rocksdb
-// support block cahe (volatile tier), secondary cache (non-volatile tier).
+// support block cache (volatile tier), secondary cache (non-volatile tier).
 // In the future, we may add more caching layers.
 enum class CacheTier : uint8_t {
   kVolatileTier = 0,
   kNonVolatileBlockTier = 0x01,
 };
 
-enum UpdateStatus {    // Return status For inplace update callback
-  UPDATE_FAILED   = 0, // Nothing to update
-  UPDATED_INPLACE = 1, // Value updated inplace
-  UPDATED         = 2, // No inplace update. Merged value set
+enum UpdateStatus {     // Return status For inplace update callback
+  UPDATE_FAILED = 0,    // Nothing to update
+  UPDATED_INPLACE = 1,  // Value updated inplace
+  UPDATED = 2,          // No inplace update. Merged value set
+};
+
+enum class PrepopulateBlobCache : uint8_t {
+  kDisable = 0x0,    // Disable prepopulate blob cache
+  kFlushOnly = 0x1,  // Prepopulate blobs during flush only
 };
 
 struct AdvancedColumnFamilyOptions {
@@ -241,7 +294,10 @@ struct AdvancedColumnFamilyOptions {
   // read amplification because a get request has to check in all of these
   // files. Also, an in-memory merge may result in writing lesser
   // data to storage if there are duplicate records in each of these
-  // individual write buffers.  Default: 1
+  // individual write buffers.
+  // If atomic flush is enabled (options.atomic_flush == true), then this
+  // option will be sanitized to 1.
+  // Default: 1
   int min_write_buffer_number_to_merge = 1;
 
   // DEPRECATED
@@ -320,6 +376,23 @@ struct AdvancedColumnFamilyOptions {
   // Dynamically changeable through SetOptions() API
   size_t inplace_update_num_locks = 10000;
 
+  // [experimental]
+  // Used to activate or deactive the Mempurge feature (memtable garbage
+  // collection). (deactivated by default). At every flush, the total useful
+  // payload (total entries minus garbage entries) is estimated as a ratio
+  // [useful payload bytes]/[size of a memtable (in bytes)]. This ratio is then
+  // compared to this `threshold` value:
+  //     - if ratio<threshold: the flush is replaced by a mempurge operation
+  //     - else: a regular flush operation takes place.
+  // Threshold values:
+  //   0.0: mempurge deactivated (default).
+  //   1.0: recommended threshold value.
+  //   >1.0 : aggressive mempurge.
+  //   0 < threshold < 1.0: mempurge triggered only for very low useful payload
+  //   ratios.
+  // [experimental]
+  double experimental_mempurge_threshold = 0.0;
+
   // existing_value - pointer to previous value (from both memtable and sst).
   //                  nullptr if key doesn't exist
   // existing_value_size - pointer to size of existing_value).
@@ -377,7 +450,7 @@ struct AdvancedColumnFamilyOptions {
   //
   // If this value is larger than 0.25, it is sanitized to 0.25.
   //
-  // Default: 0 (disable)
+  // Default: 0 (disabled)
   //
   // Dynamically changeable through SetOptions() API
   double memtable_prefix_bloom_size_ratio = 0.0;
@@ -386,7 +459,7 @@ struct AdvancedColumnFamilyOptions {
   // if memtable_prefix_bloom_size_ratio is not 0. Enabling whole key filtering
   // can potentially reduce CPU usage for point-look-ups.
   //
-  // Default: false (disable)
+  // Default: false (disabled)
   //
   // Dynamically changeable through SetOptions() API
   bool memtable_whole_key_filtering = false;
@@ -421,7 +494,7 @@ struct AdvancedColumnFamilyOptions {
   // example would be updating the same key over and over again, in which case
   // the prefix can be the key itself.
   //
-  // Default: nullptr (disable)
+  // Default: nullptr (disabled)
   std::shared_ptr<const SliceTransform>
       memtable_insert_with_hint_prefix_extractor = nullptr;
 
@@ -471,6 +544,14 @@ struct AdvancedColumnFamilyOptions {
   // according to compression_per_level[1], L3 using compression_per_level[2]
   // and L4 using compression_per_level[3]. Compaction for each level can
   // change when data grows.
+  //
+  // NOTE: if the vector size is smaller than the level number, the undefined
+  // lower level uses the last option in the vector, for example, for 3 level
+  // LSM tree the following settings are the same:
+  // {kNoCompression, kSnappyCompression}
+  // {kNoCompression, kSnappyCompression, kSnappyCompression}
+  //
+  // Dynamically changeable through SetOptions() API
   std::vector<CompressionType> compression_per_level;
 
   // Number of levels for this database
@@ -537,7 +618,7 @@ struct AdvancedColumnFamilyOptions {
   // and max_bytes_for_level_base=10MB.
   // Target sizes of level 1 to 5 starts with:
   // [- - - - 10MB]
-  // with base level is level. Target sizes of level 1 to 4 are not applicable
+  // with base level is level 5. Target sizes of level 1 to 4 are not applicable
   // because they will not be used.
   // Until the size of Level 5 grows to more than 10MB, say 11MB, we make
   // base target to level 4 and now the targets looks like:
@@ -587,11 +668,43 @@ struct AdvancedColumnFamilyOptions {
   //
   // max_bytes_for_level_multiplier_additional is ignored with this flag on.
   //
-  // Turning this feature on or off for an existing DB can cause unexpected
-  // LSM tree structure so it's not recommended.
+  // To make the migration easier, when turning this feature on, files in the
+  // LSM will be trivially moved down to fill the LSM starting from the
+  // bottommost level during DB open. For example, if the LSM looks like:
+  // L0: f0, f1
+  // L1: f2, f3
+  // L2: f4
+  // L3:
+  // L4: f5
+  // and the DB is opened with num_levels = 7 with this feature turned on,
+  // new LSM after DB open looks like the following:
+  // L0: f0, f1, (and possibly data flushed from WAL)
+  // L4: f2, f3
+  // L5: f4
+  // L6: f5
+  //
+  // If `allow_ingest_behind=true` or `preclude_last_level_data_seconds > 0`,
+  // then the last level is reserved, and we will start filling LSM from the
+  // second last level (L5 in the above example).
+  //
+  // Note that there may be excessive levels (where target level size is 0 when
+  // computed based on this feature) in the LSM after a user migrates to turn
+  // this feature on. This is especially likely when a user migrates from
+  // leveled compaction with a smaller multiplier or from universal compaction.
+  // RocksDB will gradually drain these unnecessary levels by compacting files
+  // down the LSM.
   //
   // Default: false
   bool level_compaction_dynamic_level_bytes = false;
+
+  // Allows RocksDB to generate files that are not exactly the target_file_size
+  // only for the non-bottommost files. Which can reduce the write-amplification
+  // from compaction. The file size could be from 0 to 2x target_file_size.
+  // Once enabled, non-bottommost compaction will try to cut the files align
+  // with the next level file boundaries (grandparent level).
+  //
+  // Default: true
+  bool level_compaction_dynamic_file_size = true;
 
   // Default: 10.
   //
@@ -616,6 +729,17 @@ struct AdvancedColumnFamilyOptions {
   //
   // Dynamically changeable through SetOptions() API
   uint64_t max_compaction_bytes = 0;
+
+  // When setting up compaction input files, we ignore the
+  // `max_compaction_bytes` limit when pulling in input files that are entirely
+  // within output key range.
+  //
+  // Default: true
+  //
+  // Dynamically changeable through SetOptions() API
+  // We could remove this knob and always ignore the limit once it is proven
+  // safe.
+  bool ignore_max_compaction_bytes_for_input = true;
 
   // All writes will be slowed down to at least delayed_write_rate if estimated
   // bytes needed to be compaction exceed this threshold.
@@ -675,7 +799,7 @@ struct AdvancedColumnFamilyOptions {
   // Related options that were originally here but now moved include:
   //   no_block_cache
   //   block_cache
-  //   block_cache_compressed
+  //   block_cache_compressed (removed)
   //   block_size
   //   block_size_deviation
   //   block_restart_interval
@@ -788,7 +912,9 @@ struct AdvancedColumnFamilyOptions {
   // age is based on the file's last modified time (given by the underlying
   // Env).
   //
-  // Supported in Level and FIFO compaction.
+  // Supported in all compaction styles.
+  // In Universal compaction, rocksdb will try to do a full compaction when
+  // possible, see more in UniversalCompactionBuilder::PickPeriodicCompaction().
   // In FIFO compaction, this option has the same meaning as TTL and whichever
   // stricter will be used.
   // Pre-req: max_open_file == -1.
@@ -817,10 +943,59 @@ struct AdvancedColumnFamilyOptions {
 
   // EXPERIMENTAL
   // The feature is still in development and is incomplete.
-  // If this option is set, when creating bottommost files, pass this
+  // If this option is set, when creating the last level files, pass this
   // temperature to FileSystem used. Should be no-op for default FileSystem
   // and users need to plug in their own FileSystem to take advantage of it.
+  //
+  // Note: the feature is changed from `bottommost_temperature` to
+  //  `last_level_temperature` which now only apply for the last level files.
+  //  The option name `bottommost_temperature` is kept only for migration, the
+  //  behavior is the same as `last_level_temperature`. Please stop using
+  //  `bottommost_temperature` and will be removed in next release.
+  //
+  // Dynamically changeable through the SetOptions() API
   Temperature bottommost_temperature = Temperature::kUnknown;
+  Temperature last_level_temperature = Temperature::kUnknown;
+
+  // EXPERIMENTAL
+  // The feature is still in development and is incomplete.
+  // If this option is set, when data insert time is within this time range, it
+  // will be precluded from the last level.
+  // 0 means no key will be precluded from the last level.
+  //
+  // Note: when enabled, universal size amplification (controlled by option
+  //  `compaction_options_universal.max_size_amplification_percent`) calculation
+  //  will exclude the last level. As the feature is designed for tiered storage
+  //  and a typical setting is the last level is cold tier which is likely not
+  //  size constrained, the size amp is going to be only for non-last levels.
+  //
+  // Default: 0 (disable the feature)
+  //
+  // Not dynamically changeable, change it requires db restart.
+  uint64_t preclude_last_level_data_seconds = 0;
+
+  // EXPERIMENTAL
+  // If this option is set, it will preserve the internal time information about
+  // the data until it's older than the specified time here.
+  // Internally the time information is a map between sequence number and time,
+  // which is the same as `preclude_last_level_data_seconds`. But it won't
+  // preclude the data from the last level and the data in the last level won't
+  // have the sequence number zeroed out.
+  // Internally, rocksdb would sample the sequence number to time pair and store
+  // that in SST property "rocksdb.seqno.time.map". The information is currently
+  // only used for tiered storage compaction (option
+  // `preclude_last_level_data_seconds`).
+  //
+  // Note: if both `preclude_last_level_data_seconds` and this option is set, it
+  //  will preserve the max time of the 2 options and compaction still preclude
+  //  the data based on `preclude_last_level_data_seconds`.
+  //  The higher the preserve_time is, the less the sampling frequency will be (
+  //  which means less accuracy of the time estimation).
+  //
+  // Default: 0 (disable the feature)
+  //
+  // Not dynamically changeable, change it requires db restart.
+  uint64_t preserve_internal_time_seconds = 0;
 
   // When set, large values (blobs) are written to separate blob files, and
   // only pointers to them are stored in SST files. This can reduce write
@@ -909,35 +1084,94 @@ struct AdvancedColumnFamilyOptions {
   // Dynamically changeable through the SetOptions() API
   uint64_t blob_compaction_readahead_size = 0;
 
+  // Enable blob files starting from a certain LSM tree level.
+  //
+  // For certain use cases that have a mix of short-lived and long-lived values,
+  // it might make sense to support extracting large values only during
+  // compactions whose output level is greater than or equal to a specified LSM
+  // tree level (e.g. compactions into L1/L2/... or above). This could reduce
+  // the space amplification caused by large values that are turned into garbage
+  // shortly after being written at the price of some write amplification
+  // incurred by long-lived values whose extraction to blob files is delayed.
+  //
+  // Default: 0
+  //
+  // Dynamically changeable through the SetOptions() API
+  int blob_file_starting_level = 0;
+
+  // The Cache object to use for blobs. Using a dedicated object for blobs and
+  // using the same object for the block and blob caches are both supported. In
+  // the latter case, note that blobs are less valuable from a caching
+  // perspective than SST blocks, and some cache implementations have
+  // configuration options that can be used to prioritize items accordingly (see
+  // Cache::Priority and LRUCacheOptions::{high,low}_pri_pool_ratio).
+  //
+  // Default: nullptr (disabled)
+  std::shared_ptr<Cache> blob_cache = nullptr;
+
+  // Enable/disable prepopulating the blob cache. When set to kFlushOnly, BlobDB
+  // will insert newly written blobs into the blob cache during flush. This can
+  // improve performance when reading back these blobs would otherwise be
+  // expensive (e.g. when using direct I/O or remote storage), or when the
+  // workload has a high temporal locality.
+  //
+  // Default: disabled
+  //
+  // Dynamically changeable through the SetOptions() API
+  PrepopulateBlobCache prepopulate_blob_cache = PrepopulateBlobCache::kDisable;
+
+  // Enable memtable per key-value checksum protection.
+  //
+  // Each entry in memtable will be suffixed by a per key-value checksum.
+  // This options determines the size of such checksums.
+  //
+  // It is suggested to turn on write batch per key-value
+  // checksum protection together with this option, so that the checksum
+  // computation is done outside of writer threads (memtable kv checksum can be
+  // computed from write batch checksum) See
+  // WriteOptions::protection_bytes_per_key for more detail.
+  //
+  // Default: 0 (no protection)
+  // Supported values: 0, 1, 2, 4, 8.
+  uint32_t memtable_protection_bytes_per_key = 0;
+
+  // UNDER CONSTRUCTION -- DO NOT USE
+  // When the user-defined timestamp feature is enabled, this flag controls
+  // whether the user-defined timestamps will be persisted.
+  //
+  // When it's false, the user-defined timestamps will be removed from the user
+  // keys when data is flushed from memtables to SST files. Other places that
+  // user keys can be persisted like WAL and blob files go through a similar
+  // process. Users should call `DB::IncreaseFullHistoryTsLow` to set a cutoff
+  // timestamp. RocksDB refrains from flushing a memtable with data still above
+  // the cutoff timestamp with best effort. When users try to read below the
+  // cutoff timestamp, an error will be returned.
+  //
+  // Default: true (user-defined timestamps are persisted)
+  // Not dynamically changeable, change it requires db restart and
+  // only compatible changes are allowed.
+  bool persist_user_defined_timestamps = true;
+
+  // Enable/disable per key-value checksum protection for in memory blocks.
+  //
+  // Checksum is constructed when a block is loaded into memory and verification
+  // is done for each key read from the block. This is useful for detecting
+  // in-memory data corruption. Note that this feature has a non-trivial
+  // negative impact on read performance. Different values of the
+  // option have similar performance impact, but different memory cost and
+  // corruption detection probability (e.g. 1 byte gives 255/256 chance for
+  // detecting a corruption).
+  //
+  // Default: 0 (no protection)
+  // Supported values: 0, 1, 2, 4, 8.
+  uint8_t block_protection_bytes_per_key = 0;
+
   // Create ColumnFamilyOptions with default values for all fields
   AdvancedColumnFamilyOptions();
   // Create ColumnFamilyOptions from Options
   explicit AdvancedColumnFamilyOptions(const Options& options);
 
   // ---------------- OPTIONS NOT SUPPORTED ANYMORE ----------------
-
-  // NOT SUPPORTED ANYMORE
-  // This does not do anything anymore.
-  int max_mem_compaction_level;
-
-  // NOT SUPPORTED ANYMORE -- this options is no longer used
-  // Puts are delayed to options.delayed_write_rate when any level has a
-  // compaction score that exceeds soft_rate_limit. This is ignored when == 0.0.
-  //
-  // Default: 0 (disabled)
-  //
-  // Dynamically changeable through SetOptions() API
-  double soft_rate_limit = 0.0;
-
-  // NOT SUPPORTED ANYMORE -- this options is no longer used
-  double hard_rate_limit = 0.0;
-
-  // NOT SUPPORTED ANYMORE -- this options is no longer used
-  unsigned int rate_limit_delay_max_milliseconds = 100;
-
-  // NOT SUPPORTED ANYMORE
-  // Does not have any effect.
-  bool purge_redundant_kvs_while_flush = true;
 };
 
 }  // namespace ROCKSDB_NAMESPACE

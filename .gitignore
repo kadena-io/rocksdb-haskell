@@ -17,3 +17,4 @@ cabal.project.local
 dist-newstyle
 librocksdb.so
 *.liquid
+.ghci_history

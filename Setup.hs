@@ -43,8 +43,8 @@ main = defaultMainWithHooks
                         let
                             -- rocksdb is included compressed so that it can be
                             -- considered a "source file" by cabal
-                            rocksdb_tar = toplevel </> "rocksdb-6.29.3.tar.gz"
-                            rocksdb_srcdir = "rocksdb-6.29.3"
+                            rocksdb_tar = toplevel </> "rocksdb-8.3.2.tar.gz"
+                            rocksdb_srcdir = "rocksdb-8.3.2"
                             extra_libs = ["stdc++", "gflags", "snappy", "bz2"]
                             clbi = getComponentLocalBuildInfo lbi (CLibName LMainLibName)
                             builddir = componentBuildDir lbi clbi
@@ -68,7 +68,7 @@ main = defaultMainWithHooks
                             -- shared and static flavors.
                             copyFile (rocksdb_srcdir </> dllFile "librocksdb") (dllFile "librocksdb")
                             copyFile (rocksdb_srcdir </> dllFile "librocksdb") (dllFile "libCrocksdb")
-                            copyFile (rocksdb_srcdir </> dllFile "librocksdb") (dllFile "librocksdb" <.> "6.29")
+                            copyFile (rocksdb_srcdir </> dllFile "librocksdb") (dllFile "librocksdb" <.> "8.3.2")
                             runLBIProgram lbi makeProgram
                                 [ "-C", rocksdb_srcdir, "-j" <> show jobs
                                 , "static_lib"
