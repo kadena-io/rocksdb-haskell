@@ -132,5 +132,5 @@ makeProgram = (simpleProgram "make")
     , programPostConf = \_ p ->
         -- build rocksdb without -march=native, to avoid processor feature mismatches
         -- (illegal instruction errors)
-        return p { programOverrideEnv = [("PORTABLE", Just "1")] }
+        return p { programOverrideEnv = [("PORTABLE", Just "1"), ("EXTRA_C_FLAGS", Just "-fPIC"), ("EXTRA_CXX_FLAGS", Just "-fPIC")] }
     }
