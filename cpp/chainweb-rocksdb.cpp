@@ -46,7 +46,8 @@ class DelimitedPrefixTransform : public SliceTransform {
  public:
 
   explicit DelimitedPrefixTransform(std::vector<char> *_delims) : delims(_delims) { }
-  ~DelimitedPrefixTransform() { }
+  ~DelimitedPrefixTransform() {
+  }
 
   static const char* kClassName() { return "rocksdb-haskell.DelimitedPrefix"; }
   static const char* kNickName() { return "table"; }
@@ -78,18 +79,14 @@ class DelimitedPrefixTransform : public SliceTransform {
     return false;
   }
 
-  bool SameResultWhenAppended(const Slice& prefix) const override {
+  bool SameResultWhenAppended(const Slice&) const override {
     return false;
   }
 };
 
-const SliceTransform* NewDelimitedPrefixTransform(char *delims, size_t delimsLen) {
-  std::vector<char> *delimsVec = new std::vector<char>(delimsLen);
-  for (int i = 0; i < delimsLen; i++) {
-    (*delimsVec)[i] = delims[i];
-  }
-  return new DelimitedPrefixTransform(delimsVec);
-}
+std::vector<char> std_delimiters { '$', '%' };
+
+DelimitedPrefixTransform dollar_percent_delimited_transform(&std_delimiters);
 
 extern "C" {
 
@@ -128,8 +125,8 @@ void rocksdb_readoptions_set_auto_prefix_mode(rocksdb_readoptions_t* options, bo
   options->rep.auto_prefix_mode = auto_prefix_mode;
 }
 
-const void* rocksdb_options_table_prefix_extractor(char *delims, size_t delimsLen) {
-  return NewDelimitedPrefixTransform(delims, delimsLen);
+const void* rocksdb_options_table_prefix_extractor() {
+  return &dollar_percent_delimited_transform;
 }
 
 }
