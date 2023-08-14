@@ -50,13 +50,6 @@ module Database.RocksDB.Base
     , createSnapshot
     , releaseSnapshot
 
-    -- * Filter Policy / Bloom Filter
-    , FilterPolicy (..)
-    , BloomFilter
-    , createBloomFilter
-    , releaseBloomFilter
-    -- , bloomFilter
-
     -- * Administrative Functions
     , Property (..), getProperty
     , destroy
@@ -95,12 +88,6 @@ import qualified Data.ByteString.Unsafe       as BU
 
 import qualified GHC.Foreign                  as GHC
 import qualified GHC.IO.Encoding              as GHC
-
--- -- | Create a 'BloomFilter'
--- bloomFilter :: MonadResource m => Int -> m BloomFilter
--- bloomFilter i =
---     snd <$> allocate (createBloomFilter i)
---                       releaseBloomFilter
 
 -- -- | Open a database
 -- --
@@ -340,15 +327,6 @@ write (DB db_ptr) opts batch = liftIO $ withCWriteOpts opts $ \opts_ptr ->
             touchForeignPtr p'
 
         touch (Del (PS p _ _)) = touchForeignPtr p
-
-createBloomFilter :: MonadIO m => Int -> m BloomFilter
-createBloomFilter i = do
-    let i' = fromInteger . toInteger $ i
-    fp_ptr <- liftIO $ c_rocksdb_filterpolicy_create_bloom i'
-    return $ BloomFilter fp_ptr
-
-releaseBloomFilter :: MonadIO m => BloomFilter -> m ()
-releaseBloomFilter (BloomFilter fp) = liftIO $ c_rocksdb_filterpolicy_destroy fp
 
 binaryToBS :: Binary v => v -> ByteString
 binaryToBS x = BSL.toStrict (Binary.encode x)
