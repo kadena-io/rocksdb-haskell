@@ -33,6 +33,7 @@ module Database.RocksDB.Base
 
     -- * Basic Database Manipulations
     , open
+    , openWithTTL
     , openReadOnly
     -- , openBracket
     , close
@@ -176,6 +177,13 @@ open = openWith c_rocksdb_open
 -- The returned handle should be released with 'close'.
 openReadOnly :: MonadIO m => FilePath -> Options -> m DB
 openReadOnly = openWith (\o p -> c_rocksdb_open_for_read_only o p 0)
+
+-- | Open a database with a TTL (in seconds) for keys.
+--
+-- The returned handle should be released with 'close'.
+openWithTTL :: MonadIO m => FilePath -> Options -> Int -> m DB
+openWithTTL path options ttl = 
+    openWith (\o p -> c_rocksdb_open_with_ttl o p (fromIntegral ttl)) path options
 
 -- | Close a database.
 --

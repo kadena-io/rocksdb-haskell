@@ -69,6 +69,9 @@ foreign import ccall safe "rocksdb\\c.h rocksdb_open"
 foreign import ccall safe "rocksdb\\c.h rocksdb_open_for_read_only"
   c_rocksdb_open_for_read_only :: OptionsPtr -> DBName -> CChar -> ErrPtr -> IO RocksDBPtr
 
+foreign import ccall safe "rocksdb\\c.h rocksdb_open_with_ttl"
+  c_rocksdb_open_with_ttl :: OptionsPtr -> DBName -> CInt -> ErrPtr -> IO RocksDBPtr
+
 foreign import ccall safe "rocksdb\\c.h rocksdb_close"
   c_rocksdb_close :: RocksDBPtr -> IO ()
 
