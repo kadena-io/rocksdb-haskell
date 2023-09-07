@@ -33,6 +33,7 @@ module Database.RocksDB.Base
 
     -- * Basic Database Manipulations
     , open
+    , openWithTTL
     , openReadOnly
     -- , openBracket
     , close
@@ -48,13 +49,6 @@ module Database.RocksDB.Base
     -- , withSnapshotBracket
     , createSnapshot
     , releaseSnapshot
-
-    -- * Filter Policy / Bloom Filter
-    , FilterPolicy (..)
-    , BloomFilter
-    , createBloomFilter
-    , releaseBloomFilter
-    -- , bloomFilter
 
     -- * Administrative Functions
     , Property (..), getProperty
@@ -94,42 +88,6 @@ import qualified Data.ByteString.Unsafe       as BU
 
 import qualified GHC.Foreign                  as GHC
 import qualified GHC.IO.Encoding              as GHC
-
--- -- | Create a 'BloomFilter'
--- bloomFilter :: MonadResource m => Int -> m BloomFilter
--- bloomFilter i =
---     snd <$> allocate (createBloomFilter i)
---                       releaseBloomFilter
-
--- -- | Open a database
--- --
--- -- The returned handle will automatically be released when the enclosing
--- -- 'runResourceT' terminates.
--- openBracket :: MonadResource m => FilePath -> Options -> m (ReleaseKey, DB)
--- openBracket path opts = allocate (open path opts) close
--- {-# INLINE openBracket #-}
-
--- -- | Run an action with a snapshot of the database.
--- --
--- -- The snapshot will be released when the action terminates or throws an
--- -- exception. Note that this function is provided for convenience and does not
--- -- prevent the 'Snapshot' handle to escape. It will, however, be invalid after
--- -- this function returns and should not be used anymore.
--- withSnapshotBracket :: MonadResource m => DB -> (Snapshot -> m a) -> m a
--- withSnapshotBracket db f = do
---     (rk, snap) <- createSnapshotBracket db
---     res <- f snap
---     release rk
---     return res
-
--- -- | Create a snapshot of the database.
--- --
--- -- The returned 'Snapshot' will be released automatically when the enclosing
--- -- 'runResourceT' terminates. It is recommended to use 'createSnapshot'' instead
--- -- and release the resource manually as soon as possible.
--- -- Can be released early.
--- createSnapshotBracket :: MonadResource m => DB -> m (ReleaseKey, Snapshot)
--- createSnapshotBracket db = allocate (createSnapshot db) (releaseSnapshot db)
 
 openWith :: MonadIO m => (OptionsPtr -> CString -> ErrPtr -> IO RocksDBPtr) -> [Char] -> Options -> m DB
 openWith opener path opts = liftIO $ bracketOnError initialize finalize mkDB
@@ -176,6 +134,13 @@ open = openWith c_rocksdb_open
 -- The returned handle should be released with 'close'.
 openReadOnly :: MonadIO m => FilePath -> Options -> m DB
 openReadOnly = openWith (\o p -> c_rocksdb_open_for_read_only o p 0)
+
+-- | Open a database with a TTL (in seconds) for keys.
+--
+-- The returned handle should be released with 'close'.
+openWithTTL :: MonadIO m => FilePath -> Options -> Int -> m DB
+openWithTTL path options ttl = 
+    openWith (\o p -> c_rocksdb_open_with_ttl o p (fromIntegral ttl)) path options
 
 -- | Close a database.
 --
@@ -332,15 +297,6 @@ write (DB db_ptr) opts batch = liftIO $ withCWriteOpts opts $ \opts_ptr ->
             touchForeignPtr p'
 
         touch (Del (PS p _ _)) = touchForeignPtr p
-
-createBloomFilter :: MonadIO m => Int -> m BloomFilter
-createBloomFilter i = do
-    let i' = fromInteger . toInteger $ i
-    fp_ptr <- liftIO $ c_rocksdb_filterpolicy_create_bloom i'
-    return $ BloomFilter fp_ptr
-
-releaseBloomFilter :: MonadIO m => BloomFilter -> m ()
-releaseBloomFilter (BloomFilter fp) = liftIO $ c_rocksdb_filterpolicy_destroy fp
 
 binaryToBS :: Binary v => v -> ByteString
 binaryToBS x = BSL.toStrict (Binary.encode x)
