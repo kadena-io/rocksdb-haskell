@@ -90,6 +90,7 @@ library
   -- list below.
   --
   extra-libraries:
+    rocksdb
     snappy
     gflags
     z
@@ -97,7 +98,6 @@ library
     lz4
     zstd
     stdc++
-    rocksdb
 
   if flag(with-tbb)
     extra-libraries:
